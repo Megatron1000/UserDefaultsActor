@@ -5,6 +5,12 @@ import PackageDescription
 
 let package = Package(
     name: "UserDefaultsActor",
+    platforms: [
+        .macOS(.v10_13),
+        .iOS(.v13),
+        .tvOS(.v13),
+        .watchOS(.v9)
+    ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
@@ -20,5 +26,6 @@ let package = Package(
             name: "UserDefaultsActorTests",
             dependencies: ["UserDefaultsActor"]
         ),
-    ]
+    ],
+    swiftLanguageModes: [.version("6")]
 )
