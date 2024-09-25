@@ -16,26 +16,28 @@ public actor UserDefaultsActor {
     
     private let userDefaults: UserDefaults
     
-    public init?(suite: Suite = .standard) {
+    public init(suite: Suite = .standard) {
         switch suite {
         case .standard:
             userDefaults = .standard
         case .custom(let suiteName):
             guard let defaults = UserDefaults(suiteName: suiteName) else {
-                return nil
+                assertionFailure("Failed to create user defaults for suite \(suiteName). Falling back to standard.")
+                userDefaults = .standard
+                return
             }
             userDefaults = defaults
         }
     }
     
-    public func object(forKey defaultName: String) -> Any? {
-        return userDefaults.object(forKey: defaultName)
+    public func object(forKey defaultName: String) -> Sendable? {
+        sendableUserDefaultsObject(object: userDefaults.object(forKey: defaultName))
     }
 
     /**
      -setObject:forKey: immediately stores a value (or removes the value if nil is passed as the value) for the provided key in the search list entry for the receiver's suite name in the current user and any host, then asynchronously stores the value persistently, where it is made available to other processes.
      */
-    public func set(_ value: Any?, forKey defaultName: String) {
+    public func set(_ value: Sendable?, forKey defaultName: String) {
         userDefaults.set(value, forKey: defaultName)
     }
 
@@ -50,13 +52,19 @@ public actor UserDefaultsActor {
     }
 
     /// -arrayForKey: is equivalent to -objectForKey:, except that it will return nil if the value is not an NSArray.
-    public func array(forKey defaultName: String) -> [Any]? {
-        userDefaults.array(forKey: defaultName)
+    public func array(forKey defaultName: String) -> [Sendable]? {
+        guard let array = userDefaults.array(forKey: defaultName) else {
+            return nil
+        }
+        return arrayToSendable(array)
     }
 
     /// -dictionaryForKey: is equivalent to -objectForKey:, except that it will return nil if the value is not an NSDictionary.
-    public func dictionary(forKey defaultName: String) -> [String : Any]? {
-        userDefaults.dictionary(forKey: defaultName)
+    public func dictionary(forKey defaultName: String) -> [String : Sendable]? {
+        guard let dict = userDefaults.dictionary(forKey: defaultName) else {
+            return nil
+        }
+        return dictionaryToSendable(dict)
     }
 
     /// -dataForKey: is equivalent to -objectForKey:, except that it will return nil if the value is not an NSData.
@@ -133,7 +141,7 @@ public actor UserDefaultsActor {
      
      Default values from Defaults Configuration Files will automatically be registered.
      */
-    public func register(defaults registrationDictionary: [String : Any]) {
+    public func register(defaults registrationDictionary: [String : Sendable]) {
         userDefaults.register(defaults: registrationDictionary)
     }
 
@@ -154,19 +162,21 @@ public actor UserDefaultsActor {
     /**
      -dictionaryRepresentation returns a composite snapshot of the values in the receiver's search list, such that [[receiver dictionaryRepresentation] objectForKey:x] will return the same thing as [receiver objectForKey:x].
      */
-    public func dictionaryRepresentation() -> [String : Any] {
-        userDefaults.dictionaryRepresentation()
+    public func dictionaryRepresentation() -> [String : Sendable] {
+        let dict = userDefaults.dictionaryRepresentation()
+        return dictionaryToSendable(dict) ?? [:]
     }
 
     public var volatileDomainNames: [String] {
         userDefaults.volatileDomainNames
     }
 
-    public func volatileDomain(forName domainName: String) -> [String : Any] {
-        userDefaults.volatileDomain(forName: domainName)
+    public func volatileDomain(forName domainName: String) -> [String : Sendable] {
+        let dict = userDefaults.volatileDomain(forName: domainName)
+        return dictionaryToSendable(dict) ?? [:]
     }
 
-    public func setVolatileDomain(_ domain: [String : Any], forName domainName: String) {
+    public func setVolatileDomain(_ domain: [String : Sendable], forName domainName: String) {
         userDefaults.set(domain, forKey: domainName)
     }
 
@@ -175,12 +185,15 @@ public actor UserDefaultsActor {
     }
 
     /// -persistentDomainForName: returns a dictionary representation of the search list entry specified by 'domainName', the current user, and any host.
-    public func persistentDomain(forName domainName: String) -> [String : Any]? {
-        userDefaults.persistentDomain(forName: domainName)
+    public func persistentDomain(forName domainName: String) -> [String : Sendable]? {
+        guard let dict = userDefaults.persistentDomain(forName: domainName) else {
+            return nil
+        }
+        return dictionaryToSendable(dict)
     }
 
     /// -setPersistentDomain:forName: replaces all values in the search list entry specified by 'domainName', the current user, and any host, with the values in 'domain'. The change will be persisted.
-    public func setPersistentDomain(_ domain: [String : Any], forName domainName: String) {
+    public func setPersistentDomain(_ domain: [String : Sendable], forName domainName: String) {
         userDefaults.setPersistentDomain(domain, forName: domainName)
     }
 
@@ -189,4 +202,70 @@ public actor UserDefaultsActor {
         userDefaults.removeObject(forKey: domainName)
     }
     
+    private func sendableUserDefaultsObject(object: Any?) -> Sendable? {
+        guard let object else { return nil }
+        
+        // Check for known Sendable types
+        if let sendableObject = object as? String {
+            return sendableObject
+        } else if let sendableObject = object as? Int {
+            return sendableObject
+        } else if let sendableObject = object as? Double {
+            return sendableObject
+        } else if let sendableObject = object as? Float {
+            return sendableObject
+        } else if let sendableObject = object as? Bool {
+            return sendableObject
+        } else if let sendableObject = object as? Data {
+            return sendableObject
+        } else if let sendableObject = object as? [String: Any] {
+            // Recursively check for dictionary values
+            return dictionaryToSendable(sendableObject)
+        } else if let sendableObject = object as? [Any] {
+            // Recursively check for array elements
+            return arrayToSendable(sendableObject)
+        }
+        
+        return nil  // Unsupported type
+    }
+
+    private func dictionaryToSendable(_ dict: [String: Any]) -> [String: Sendable]? {
+        var sendableDict: [String: Sendable] = [:]
+        
+        for (key, value) in dict {
+            if let sendableValue = sendableUserDefaultsObject(object: value) {
+                sendableDict[key] = sendableValue
+            } else if let nestedDict = value as? [String: Any],
+                      let sendableNestedDict = dictionaryToSendable(nestedDict) {
+                sendableDict[key] = sendableNestedDict
+            } else if let nestedArray = value as? [Any],
+                      let sendableNestedArray = arrayToSendable(nestedArray) {
+                sendableDict[key] = sendableNestedArray
+            } else {
+                return nil  // Found an unsupported type
+            }
+        }
+        
+        return sendableDict
+    }
+
+    private func arrayToSendable(_ array: [Any]) -> [Sendable]? {
+        var sendableArray: [Sendable] = []
+        
+        for value in array {
+            if let sendableValue = sendableUserDefaultsObject(object: value) {
+                sendableArray.append(sendableValue)
+            } else if let nestedDict = value as? [String: Any],
+                      let sendableNestedDict = dictionaryToSendable(nestedDict) {
+                sendableArray.append(sendableNestedDict)
+            } else if let nestedArray = value as? [Any],
+                      let sendableNestedArray = arrayToSendable(nestedArray) {
+                sendableArray.append(sendableNestedArray)
+            } else {
+                return nil  // Found an unsupported type
+            }
+        }
+        
+        return sendableArray
+    }
 }
